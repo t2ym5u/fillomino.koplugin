@@ -16,7 +16,7 @@ local Size            = require("ui/size")
 local UIManager       = require("ui/uimanager")
 local VerticalGroup   = require("ui/widget/verticalgroup")
 local VerticalSpan    = require("ui/widget/verticalspan")
-local _               = require("gettext")
+local _               = require("i18n")
 local T               = require("ffi/util").template
 
 local ScreenBase          = require("screen_base")
@@ -275,14 +275,25 @@ function FillominoScreen:onCheck()
 end
 
 function FillominoScreen:showRulesHint()
-    self:showMessage(_(
-        "Fill every cell with a number 1-9.\n" ..
-        "Cells with the same number form connected groups\n" ..
-        "of exactly that many cells.\n" ..
-        "No two groups of the same size may be adjacent.\n\n" ..
-        "Tap a cell to select, then tap a digit button.\n" ..
-        "Tap the same digit to erase."
-    ), 8)
+    if _.lang() == "fr" then
+        self:showMessage(
+            "Remplissez chaque case avec un chiffre de 1 à 9.\n" ..
+            "Les cases portant le même chiffre forment des groupes connectés\n" ..
+            "d'exactement ce nombre de cases.\n" ..
+            "Deux groupes de même taille ne peuvent pas être adjacents.\n\n" ..
+            "Appuyez sur une case pour la sélectionner, puis sur un chiffre.\n" ..
+            "Appuyez sur le même chiffre pour effacer."
+        , 8)
+    else
+        self:showMessage(_(
+            "Fill every cell with a number 1-9.\n" ..
+            "Cells with the same number form connected groups\n" ..
+            "of exactly that many cells.\n" ..
+            "No two groups of the same size may be adjacent.\n\n" ..
+            "Tap a cell to select, then tap a digit button.\n" ..
+            "Tap the same digit to erase."
+        ), 8)
+    end
 end
 
 -- ---------------------------------------------------------------------------
