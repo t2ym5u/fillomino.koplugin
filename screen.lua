@@ -44,6 +44,8 @@ Rules:
 • There is no limit on how many groups of any given number can exist.
 
 Example: a group of cells all containing 3 must consist of exactly 3 orthogonally connected cells.
+
+Tap a cell to select it, then tap a digit button to fill it in. Tap the same digit again to erase.
 ]])
 
 local GAME_RULES_FR = [[
@@ -57,6 +59,8 @@ Règles :
 • Il n'y a pas de limite au nombre de groupes d'un même chiffre.
 
 Exemple : un groupe de cases contenant toutes le chiffre 3 doit être composé d'exactement 3 cases orthogonalement connectées.
+
+Appuyez sur une case pour la sélectionner, puis sur un chiffre pour la remplir. Appuyez à nouveau sur le même chiffre pour effacer.
 ]]
 
 local FillominoScreen = ScreenBase:extend{}
@@ -104,22 +108,15 @@ function FillominoScreen:buildLayout()
         and math.max(right_panel_width - Size.span.horizontal_default, 100)
         or  math.floor(sw * 0.9)
 
-    -- Top bar
-    local top_buttons = ButtonTable:new{
-        shrink_unneeded_width = true,
-        width   = button_width,
-        buttons = {{
-            { text = _("New game"), callback = function() self:onNewGame() end },
-            { id = "grid_button",   text = self:getGridButtonText(),
-              callback = function() self:openGridMenu() end },
-            { id = "diff_button",   text = self:getDiffButtonText(),
-              callback = function() self:openDifficultyMenu() end },
+    -- Title bar with Options menu
+    local title_bar = self:buildTitleBar(_("Fillomino"), function()
+        return {
+            { text = _("New game"),            callback = function() self:onNewGame() end },
+            { text = self:getGridButtonText(), callback = function() self:openGridMenu() end },
+            { text = self:getDiffButtonText(), callback = function() self:openDifficultyMenu() end },
             self:makeRulesButtonConfig(GAME_RULES_EN, GAME_RULES_FR),
-            self:makeCloseButtonConfig(),
-        }},
-    }
-    self.grid_button = top_buttons:getButtonById("grid_button")
-    self.diff_button = top_buttons:getButtonById("diff_button")
+        }
+    end)
 
     -- Digit buttons 1..9
     local digit_row = {}
@@ -146,46 +143,41 @@ function FillominoScreen:buildLayout()
             { text = _("Erase"), callback = function() self:onErase() end },
             { id = "undo_button", text = _("Undo"),
               callback = function() self:onUndo() end },
-            { text = _("Rules"),  callback = function() self:showRulesHint() end },
         }},
     }
     self.undo_button = bottom_buttons:getButtonById("undo_button")
     self:_updateUndoButton()
 
+    local footer = VerticalGroup:new{
+        align = "center",
+        digit_buttons,
+        VerticalSpan:new{ width = Size.span.vertical_large },
+        bottom_buttons,
+    }
+
     if is_landscape then
         local right_panel = VerticalGroup:new{
             align = "center",
-            top_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
             self.status_text,
             VerticalSpan:new{ width = Size.span.vertical_large },
-            digit_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            bottom_buttons,
+            footer,
         }
-        self.layout = HorizontalGroup:new{
+        local content = HorizontalGroup:new{
             align = "center",
             board_frame,
             HorizontalSpan:new{ width = Size.span.horizontal_default },
             right_panel,
         }
+        self:buildLandscapeLayout(title_bar, content)
     else
-        self.layout = VerticalGroup:new{
+        local content = VerticalGroup:new{
             align = "center",
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            top_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
             board_frame,
             VerticalSpan:new{ width = Size.span.vertical_large },
             self.status_text,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            digit_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            bottom_buttons,
-            VerticalSpan:new{ width = Size.span.vertical_large },
         }
+        self:buildPortraitLayout(title_bar, content, footer)
     end
-    self[1] = self.layout
     self:updateStatus()
 end
 
@@ -271,28 +263,6 @@ function FillominoScreen:onCheck()
     else
         local remaining = self.board:getRemainingCells()
         self:updateStatus(T(_("Check done. Empty cells: %1"), remaining))
-    end
-end
-
-function FillominoScreen:showRulesHint()
-    if _.lang() == "fr" then
-        self:showMessage(
-            "Remplissez chaque case avec un chiffre de 1 à 9.\n" ..
-            "Les cases portant le même chiffre forment des groupes connectés\n" ..
-            "d'exactement ce nombre de cases.\n" ..
-            "Deux groupes de même taille ne peuvent pas être adjacents.\n\n" ..
-            "Appuyez sur une case pour la sélectionner, puis sur un chiffre.\n" ..
-            "Appuyez sur le même chiffre pour effacer."
-        , 8)
-    else
-        self:showMessage(_(
-            "Fill every cell with a number 1-9.\n" ..
-            "Cells with the same number form connected groups\n" ..
-            "of exactly that many cells.\n" ..
-            "No two groups of the same size may be adjacent.\n\n" ..
-            "Tap a cell to select, then tap a digit button.\n" ..
-            "Tap the same digit to erase."
-        ), 8)
     end
 end
 
