@@ -9,6 +9,11 @@ local shuffle       = grid_utils.shuffle
 local DEFAULT_N          = 6
 local DEFAULT_DIFFICULTY = "medium"
 
+-- Must match MAX_DIGIT in screen.lua: the digit keypad only offers 1..9,
+-- so no generated region may end up bigger than that or the player would
+-- have no way to type its value back in.
+local MAX_VALUE = 9
+
 local DIRS = { {-1,0},{1,0},{0,-1},{0,1} }
 
 -- ---------------------------------------------------------------------------
@@ -97,7 +102,7 @@ local function normalizeToValid(solution, n)
     return solution
 end
 
-local function generateSolution(n)
+local function generateSolutionOnce(n)
     local solution = emptyGrid(n)
     local free     = emptyBoolGrid(n)
     -- All cells start free
@@ -127,39 +132,46 @@ local function generateSolution(n)
         end
     end
 
-    -- Fill any remaining free cells: group each connected component of
-    -- leftover free cells and stamp it with its own true size. Stamping
-    -- every leftover cell as a fixed 1 (the old behavior) is wrong whenever
-    -- two leftover cells end up adjacent -- they'd form one bigger connected
-    -- region while each displays "1", violating fillomino's own rule that a
-    -- cell's value must equal its region's actual size.
+    -- Fill any remaining free cells using the same bounded-size growth as
+    -- the main loop above, instead of dumping every leftover connected
+    -- component into a single stamped blob. An unbounded blob can span
+    -- dozens of cells, producing a clue value the digit keypad (1..9) can
+    -- never let the player type back in.
+    local max_k = math.min(5, n)
     for r = 1, n do
         for c = 1, n do
             if free[r][c] then
-                local stack = { {r, c} }
-                local comp  = { {r, c} }
-                free[r][c] = false
-                while #stack > 0 do
-                    local cell = table.remove(stack)
-                    local cr, cc = cell[1], cell[2]
-                    for _, d in ipairs(DIRS) do
-                        local nr, nc = cr + d[1], cc + d[2]
-                        if nr >= 1 and nr <= n and nc >= 1 and nc <= n and free[nr][nc] then
-                            free[nr][nc] = false
-                            comp[#comp + 1] = {nr, nc}
-                            stack[#stack + 1] = {nr, nc}
-                        end
-                    end
-                end
-                local size = #comp
-                for _, cell in ipairs(comp) do
-                    solution[cell[1]][cell[2]] = size
+                local k = math.random(1, max_k)
+                local region = expandRegion(free, n, r, c, k)
+                for _, cell in ipairs(region) do
+                    free[cell[1]][cell[2]] = false
+                    solution[cell[1]][cell[2]] = #region
                 end
             end
         end
     end
 
     return normalizeToValid(solution, n)
+end
+
+-- Bounding every region's initial growth to <=5 (above) keeps the common
+-- case within the keypad's 1..9 range, but normalizeToValid's merges can
+-- rarely still push a region past 9 (e.g. two adjacent size-5 regions
+-- coalescing into 10) since merges are only ever discovered after the fact.
+-- Retry generation outright when that happens rather than trying to patch
+-- an already-merged grid.
+local function generateSolution(n)
+    for _ = 1, 200 do
+        local solution = generateSolutionOnce(n)
+        local max_v = 0
+        for r = 1, n do
+            for c = 1, n do
+                if solution[r][c] > max_v then max_v = solution[r][c] end
+            end
+        end
+        if max_v <= MAX_VALUE then return solution end
+    end
+    return generateSolutionOnce(n)
 end
 
 -- ---------------------------------------------------------------------------
