@@ -48,6 +48,55 @@ local function expandRegion(free, n, sr, sc, k)
     return cells
 end
 
+-- Repeatedly recompute maximal same-value connected components and relabel
+-- each one with its own true size, until stable. This is the fixpoint that
+-- guarantees the fillomino invariant (component size == displayed value)
+-- regardless of how the input grid was built: any independently-placed
+-- regions that happen to be adjacent-and-equal-sized are, by definition,
+-- actually one bigger component -- so relabeling to the true size and
+-- re-checking (since that new size might now collide with a further
+-- neighbor) converges to a fully valid grid. Values only ever grow across
+-- iterations (merges make components bigger, never smaller) and are capped
+-- at n*n, so this always terminates.
+local function normalizeToValid(solution, n)
+    local changed = true
+    while changed do
+        changed = false
+        local seen = emptyBoolGrid(n)
+        for r = 1, n do
+            for c = 1, n do
+                if not seen[r][c] then
+                    local v     = solution[r][c]
+                    local stack = { {r, c} }
+                    seen[r][c] = true
+                    local cells = { {r, c} }
+                    while #stack > 0 do
+                        local cell = table.remove(stack)
+                        local cr, cc = cell[1], cell[2]
+                        for _, d in ipairs(DIRS) do
+                            local nr, nc = cr + d[1], cc + d[2]
+                            if nr >= 1 and nr <= n and nc >= 1 and nc <= n
+                                and not seen[nr][nc]
+                                and solution[nr][nc] == v then
+                                seen[nr][nc] = true
+                                cells[#cells + 1] = {nr, nc}
+                                stack[#stack + 1] = {nr, nc}
+                            end
+                        end
+                    end
+                    if #cells ~= v then
+                        changed = true
+                        for _, cell in ipairs(cells) do
+                            solution[cell[1]][cell[2]] = #cells
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return solution
+end
+
 local function generateSolution(n)
     local solution = emptyGrid(n)
     local free     = emptyBoolGrid(n)
@@ -78,78 +127,184 @@ local function generateSolution(n)
         end
     end
 
-    -- Fill any remaining free cells as size-1 regions
+    -- Fill any remaining free cells: group each connected component of
+    -- leftover free cells and stamp it with its own true size. Stamping
+    -- every leftover cell as a fixed 1 (the old behavior) is wrong whenever
+    -- two leftover cells end up adjacent -- they'd form one bigger connected
+    -- region while each displays "1", violating fillomino's own rule that a
+    -- cell's value must equal its region's actual size.
     for r = 1, n do
         for c = 1, n do
-            if solution[r][c] == 0 then
-                solution[r][c] = 1
-            end
-        end
-    end
-
-    return solution
-end
-
--- ---------------------------------------------------------------------------
--- Verify no two same-sized adjacent regions share a border
--- ---------------------------------------------------------------------------
-
-local function checkAdjacency(solution, n)
-    -- Find connected components (regions) in solution
-    local region_id = emptyGrid(n)
-    local next_id   = 0
-    for r = 1, n do
-        for c = 1, n do
-            if region_id[r][c] == 0 then
-                next_id = next_id + 1
-                local v     = solution[r][c]
+            if free[r][c] then
                 local stack = { {r, c} }
-                region_id[r][c] = next_id
+                local comp  = { {r, c} }
+                free[r][c] = false
                 while #stack > 0 do
                     local cell = table.remove(stack)
                     local cr, cc = cell[1], cell[2]
                     for _, d in ipairs(DIRS) do
                         local nr, nc = cr + d[1], cc + d[2]
-                        if nr >= 1 and nr <= n and nc >= 1 and nc <= n
-                            and region_id[nr][nc] == 0
-                            and solution[nr][nc] == v then
-                            region_id[nr][nc] = next_id
+                        if nr >= 1 and nr <= n and nc >= 1 and nc <= n and free[nr][nc] then
+                            free[nr][nc] = false
+                            comp[#comp + 1] = {nr, nc}
                             stack[#stack + 1] = {nr, nc}
                         end
                     end
                 end
-            end
-        end
-    end
-
-    -- Check: no two different regions with same size share an edge
-    for r = 1, n do
-        for c = 1, n do
-            local id1 = region_id[r][c]
-            local sz1 = solution[r][c]
-            for _, d in ipairs(DIRS) do
-                local nr, nc = r + d[1], c + d[2]
-                if nr >= 1 and nr <= n and nc >= 1 and nc <= n then
-                    local id2 = region_id[nr][nc]
-                    local sz2 = solution[nr][nc]
-                    if id1 ~= id2 and sz1 == sz2 then
-                        return false
-                    end
+                local size = #comp
+                for _, cell in ipairs(comp) do
+                    solution[cell[1]][cell[2]] = size
                 end
             end
         end
     end
-    return true
+
+    return normalizeToValid(solution, n)
 end
 
 -- ---------------------------------------------------------------------------
--- Create puzzle from solution: reveal some cells as clues
+-- Uniqueness counter: MRV-over-regions (mirrors nurikabe's island-growing
+-- solver). Grows each given-clue-seeded region -- target size = its clue
+-- value, known up front -- one frontier cell at a time, rather than guessing
+-- a raw value per empty cell (which is intractably slow here since regions
+-- can run past 20 cells once merges cascade). Deliberate approximation: only
+-- grows regions that already have >=1 given clue; it does not consider an
+-- alternate completion that invents a brand-new region with zero clues
+-- anywhere in it. createPuzzle always keeps >=1 given cell per region while
+-- digging (losing a region's last clue makes this solver unable to claim
+-- those cells at all, so it naturally reports "not unique" and the digger
+-- reverts that hide), so this bias only affects exotic phantom-region
+-- completions, never the puzzle's own intended solution.
+-- ---------------------------------------------------------------------------
+
+local function countSolutions(puzzle, given, n, limit, node_budget)
+    local color = {}
+    for r = 1, n do color[r] = {}; for c = 1, n do color[r][c] = 0 end end
+
+    local regions = {}
+    local gseen = emptyBoolGrid(n)
+    for r = 1, n do
+        for c = 1, n do
+            if given[r][c] and not gseen[r][c] then
+                local v = puzzle[r][c]
+                local idx = #regions + 1
+                local stack = { {r, c} }
+                gseen[r][c] = true
+                color[r][c] = idx
+                local cells = { {r, c} }
+                while #stack > 0 do
+                    local cur = table.remove(stack)
+                    for _, d in ipairs(DIRS) do
+                        local nr, nc = cur[1] + d[1], cur[2] + d[2]
+                        if nr >= 1 and nr <= n and nc >= 1 and nc <= n and given[nr][nc]
+                            and puzzle[nr][nc] == v and not gseen[nr][nc] then
+                            gseen[nr][nc] = true
+                            color[nr][nc] = idx
+                            cells[#cells + 1] = {nr, nc}
+                            stack[#stack + 1] = {nr, nc}
+                        end
+                    end
+                end
+                regions[idx] = { target = v, cells = cells }
+            end
+        end
+    end
+    local num_regions = #regions
+
+    local total_cells = n * n
+    local claimed = 0
+    for r = 1, n do for c = 1, n do if given[r][c] then claimed = claimed + 1 end end end
+
+    local solutions, nodes, exhausted = 0, 0, false
+
+    local function frontierFor(idx)
+        local reg = regions[idx]
+        local cands, seen = {}, {}
+        for _, cell in ipairs(reg.cells) do
+            for _, d in ipairs(DIRS) do
+                local nr, nc = cell[1] + d[1], cell[2] + d[2]
+                local key = nr * 1000 + nc
+                if nr >= 1 and nr <= n and nc >= 1 and nc <= n and color[nr][nc] == 0 and not seen[key] then
+                    local conflict = false
+                    for _, d2 in ipairs(DIRS) do
+                        local mr, mc = nr + d2[1], nc + d2[2]
+                        if mr >= 1 and mr <= n and mc >= 1 and mc <= n then
+                            local ov = color[mr][mc]
+                            if ov > 0 and ov ~= idx and regions[ov].target == reg.target then
+                                conflict = true; break
+                            end
+                        end
+                    end
+                    if not conflict then seen[key] = true; cands[#cands + 1] = {nr, nc} end
+                end
+            end
+        end
+        return cands
+    end
+
+    local function search()
+        if solutions >= limit or exhausted then return end
+        nodes = nodes + 1
+        if nodes > node_budget then exhausted = true; return end
+
+        local best_idx, best_frontier, best_len = nil, nil, math.huge
+        for i = 1, num_regions do
+            if #regions[i].cells < regions[i].target then
+                local frontier = frontierFor(i)
+                if #frontier < best_len then
+                    best_len, best_frontier, best_idx = #frontier, frontier, i
+                    if best_len == 0 then break end
+                end
+            end
+        end
+
+        if not best_idx then
+            if claimed == total_cells then solutions = solutions + 1 end
+            return
+        end
+        if best_len == 0 then return end
+
+        local reg = regions[best_idx]
+        for _, cell in ipairs(best_frontier) do
+            local cr, cc = cell[1], cell[2]
+            color[cr][cc] = best_idx
+            reg.cells[#reg.cells + 1] = cell
+            claimed = claimed + 1
+            search()
+            claimed = claimed - 1
+            reg.cells[#reg.cells] = nil
+            color[cr][cc] = 0
+            if solutions >= limit or exhausted then return end
+        end
+    end
+    search()
+    return solutions, exhausted
+end
+
+-- Scale the search node budget down for larger grids, mirroring nurikabe's
+-- uniquenessBudgetFor -- larger n means both a bigger CSP and more digging
+-- attempts, so keep per-call cost bounded.
+local function nodeBudgetFor(n)
+    if n <= 6 then return 60000 end
+    if n <= 7 then return 40000 end
+    return 25000
+end
+
+-- ---------------------------------------------------------------------------
+-- Create puzzle from solution: dig-with-verification. Starts fully revealed
+-- and hides cells one at a time in random order, verifying uniqueness with
+-- countSolutions after each tentative hide and reverting if it broke
+-- uniqueness -- the same pattern already used by sudoku-common and now most
+-- of this fleet. The old behavior picked a flat per-region reveal ratio with
+-- zero uniqueness verification.
 -- ---------------------------------------------------------------------------
 
 local function createPuzzle(solution, n, difficulty)
-    -- Find all regions
-    local visited   = emptyBoolGrid(n)
-    local regions   = {}  -- list of {value, cells={...}}
+    -- Find all regions, only to compute how many cells the old flat-ratio
+    -- scheme would have revealed -- used as the total-hide budget below so
+    -- difficulty still controls roughly how sparse the puzzle is.
+    local visited = emptyBoolGrid(n)
+    local regions = {}
 
     for r = 1, n do
         for c = 1, n do
@@ -177,11 +332,9 @@ local function createPuzzle(solution, n, difficulty)
         end
     end
 
-    -- Decide how many cells per region to reveal
-    local puzzle = emptyGrid(n)
+    local target_reveal = 0
     for _, reg in ipairs(regions) do
         local k = #reg.cells
-        -- Reveal at least 1 cell per region; more for larger regions on easy
         local reveal_count
         if difficulty == "easy" then
             reveal_count = math.max(1, math.floor(k * 0.5))
@@ -190,13 +343,42 @@ local function createPuzzle(solution, n, difficulty)
         else
             reveal_count = math.max(1, math.floor(k * 0.3))
         end
-        reveal_count = math.min(reveal_count, k)
-        local order = {}
-        for i = 1, k do order[i] = i end
-        shuffle(order)
-        for i = 1, reveal_count do
-            local cell = reg.cells[order[i]]
-            puzzle[cell[1]][cell[2]] = reg.value
+        target_reveal = target_reveal + math.min(reveal_count, k)
+    end
+    local target_hide = n * n - target_reveal
+
+    local puzzle = emptyGrid(n)
+    local given  = emptyBoolGrid(n)
+    for r = 1, n do
+        for c = 1, n do
+            puzzle[r][c] = solution[r][c]
+            given[r][c]  = true
+        end
+    end
+
+    local order = {}
+    for r = 1, n do
+        for c = 1, n do order[#order + 1] = {r, c} end
+    end
+    shuffle(order)
+
+    local budget = nodeBudgetFor(n)
+    local hidden = 0
+    for _, cell in ipairs(order) do
+        if hidden >= target_hide then break end
+        local r, c = cell[1], cell[2]
+        given[r][c] = false
+        local solutions, exhausted = countSolutions(puzzle, given, n, 2, budget)
+        if solutions == 1 and not exhausted then
+            hidden = hidden + 1
+        else
+            given[r][c] = true
+        end
+    end
+
+    for r = 1, n do
+        for c = 1, n do
+            if not given[r][c] then puzzle[r][c] = 0 end
         end
     end
 
@@ -232,23 +414,8 @@ function FillominoBoard:generate(difficulty)
     self.undo:clear()
     local n = self.n
 
-    -- Attempt to generate a valid solution (retry if adjacency check fails)
-    local solution
-    local ok = false
-    for attempt = 1, 30 do
-        solution = generateSolution(n)
-        if checkAdjacency(solution, n) then ok = true; break end
-    end
-    if not ok then
-        -- Fallback: one single region covering the whole grid (trivially satisfies adjacency)
-        solution = emptyGrid(n)
-        local total = n * n
-        for r = 1, n do
-            for c = 1, n do solution[r][c] = total end
-        end
-    end
-
-    local puzzle = createPuzzle(solution, n, self.difficulty)
+    local solution = generateSolution(n)
+    local puzzle   = createPuzzle(solution, n, self.difficulty)
 
     self.solution    = solution
     self.puzzle      = puzzle
