@@ -1,0 +1,19 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## [1.1.8] - 2026-07-29
+
+### Fixed
+- Solution generation could produce grids that broke fillomino's own rule:
+  leftover cells left over after region-growing were each stamped as a
+  fixed size-1 region, so two such cells ending up adjacent formed one
+  real connected region while both displayed "1". Leftover cells are now
+  grouped into their true connected components and a normalization pass
+  guarantees every displayed value matches its region's actual size.
+- Generated puzzles had no uniqueness verification — clues were revealed
+  using a flat per-region ratio with no check that the puzzle actually
+  had a single solution. Puzzle creation now starts fully revealed and
+  hides cells one at a time, verifying after each hide (via a
+  region-growing solver) that exactly one solution remains, reverting
+  any hide that breaks uniqueness.
