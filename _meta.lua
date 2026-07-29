@@ -3,5 +3,5 @@ return {
     name        = "fillomino",
     fullname    = _("Fillomino"),
     description = _("Fill regions with matching numbers"),
-    version     = "1.1.7",
+    version     = "1.1.8",
 }
