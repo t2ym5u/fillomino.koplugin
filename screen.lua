@@ -7,6 +7,7 @@ local function lrequire(name)
     return package.loaded[key]
 end
 
+local Button          = require("ui/widget/button")
 local ButtonTable     = require("ui/widget/buttontable")
 local Device          = require("device")
 local FrameContainer  = require("ui/widget/container/framecontainer")
@@ -118,21 +119,24 @@ function FillominoScreen:buildLayout()
         }
     end)
 
-    -- Digit buttons 1..9
-    local digit_row = {}
+    -- Digit buttons 1..9, drawn as real bordered buttons
+    local digit_btn_width = math.floor(button_width / MAX_DIGIT)
+    local digit_buttons = HorizontalGroup:new{}
+    self.digit_button_refs = {}
     for d = 1, MAX_DIGIT do
         local dv = d
-        digit_row[#digit_row + 1] = {
-            id       = "digit_" .. dv,
-            text     = tostring(dv),
-            callback = function() self:onDigit(dv) end,
+        local digit_btn = Button:new{
+            text       = tostring(dv),
+            width      = digit_btn_width,
+            margin     = Size.margin.small,
+            bordersize = Size.border.button,
+            radius     = Size.radius.button,
+            padding    = Size.padding.buttontable,
+            callback   = function() self:onDigit(dv) end,
         }
+        self.digit_button_refs[d] = digit_btn
+        table.insert(digit_buttons, digit_btn)
     end
-    local digit_buttons = ButtonTable:new{
-        shrink_unneeded_width = true,
-        width   = button_width,
-        buttons = { digit_row },
-    }
 
     -- Bottom bar
     local bottom_buttons = ButtonTable:new{
