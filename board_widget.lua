@@ -12,9 +12,9 @@ local drawLine       = gwb.drawLine
 -- ---------------------------------------------------------------------------
 
 local C_BG          = Blitbuffer.COLOR_WHITE
-local C_SEL         = Blitbuffer.COLOR_GRAY_C
+local C_SEL         = Blitbuffer.COLOR_LIGHT_GRAY
 local C_GIVEN_BG    = Blitbuffer.COLOR_GRAY_D
-local C_WRONG_BG    = Blitbuffer.COLOR_GRAY_A
+local C_WRONG_BG    = Blitbuffer.COLOR_GRAY
 local C_LINE_THIN   = Blitbuffer.COLOR_GRAY_9
 local C_LINE        = Blitbuffer.COLOR_BLACK
 local C_GIVEN_FG    = Blitbuffer.COLOR_BLACK
