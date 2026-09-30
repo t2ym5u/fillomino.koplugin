@@ -146,6 +146,7 @@ function FillominoScreen:buildLayout()
         width   = button_width,
         buttons = {{
             { text = _("Check"), callback = function() self:onCheck() end },
+            { text = _("Hint"), callback = function() self:onHint() end },
             { text = _("Erase"), callback = function() self:onErase() end },
             { id = "undo_button", text = _("Undo"),
               callback = function() self:onUndo() end },
