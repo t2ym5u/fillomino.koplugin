@@ -33,7 +33,7 @@ Fill every cell so that each group of orthogonally connected cells sharing the s
 | Enter a number | Tap the digit button |
 | Erase a cell | Tap **Erase** |
 | Check progress | Tap **Check** |
-| New puzzle | Tap **New** |
+| New puzzle | Tap **New game** |
 | Show rules | Tap **Rules** |
 
 ## License

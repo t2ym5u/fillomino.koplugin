@@ -7,9 +7,6 @@ local function lrequire(name)
     return package.loaded[key]
 end
 
-local Button          = require("ui/widget/button")
-local ButtonTable     = require("ui/widget/buttontable")
-local Device          = require("device")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan  = require("ui/widget/horizontalspan")
@@ -24,8 +21,6 @@ local ScreenBase          = require("screen_base")
 local MenuHelper          = require("menu_helper")
 local FillominoBoard      = lrequire("board")
 local FillominoBoardWidget = lrequire("board_widget")
-
-local DeviceScreen = Device.screen
 
 local GRID_SIZES   = { 6, 7, 8 }
 local MAX_DIGIT    = 9
@@ -86,30 +81,7 @@ end
 -- ---------------------------------------------------------------------------
 
 function FillominoScreen:buildLayout()
-    local sw           = DeviceScreen:getWidth()
     local is_landscape = self:isLandscape()
-
-    self.board_widget = FillominoBoardWidget:new{
-        board          = self.board,
-        onCellSelected = function(r, c) self:onCellSelected(r, c) end,
-    }
-    if self.selected then
-        self.board_widget:setSelected(self.selected.r, self.selected.c)
-    end
-
-    local board_frame = FrameContainer:new{
-        padding = Size.padding.large,
-        margin  = Size.margin.default,
-        self.board_widget,
-    }
-
-    local board_frame_size  = self.board_widget.size + (Size.padding.large + Size.margin.default) * 2
-    local right_panel_width = sw - board_frame_size - Size.span.horizontal_default
-    local button_width = is_landscape
-        and math.max(right_panel_width - Size.span.horizontal_default, 100)
-        or  math.floor(sw * 0.9)
-
-    self.status_text:setMaxWidth(is_landscape and button_width or board_frame_size)
 
     -- Title bar with Options menu
     local title_bar = self:buildTitleBar(_("Fillomino"), function()
@@ -121,69 +93,69 @@ function FillominoScreen:buildLayout()
         }
     end)
 
-    -- Digit buttons 1..9, drawn as real bordered buttons
-    local digit_btn_width = math.floor(button_width / MAX_DIGIT)
-    local digit_buttons = HorizontalGroup:new{}
-    self.digit_button_refs = {}
+    -- Digit pad 1..9
+    local keys = {}
     for d = 1, MAX_DIGIT do
         local dv = d
-        local digit_btn = Button:new{
-            text       = tostring(dv),
-            width      = digit_btn_width,
-            margin     = Size.margin.small,
-            bordersize = Size.border.button,
-            radius     = Size.radius.button,
-            padding    = Size.padding.buttontable,
-            callback   = function() self:onDigit(dv) end,
-        }
-        self.digit_button_refs[d] = digit_btn
-        table.insert(digit_buttons, digit_btn)
+        keys[#keys + 1] = { id = "digit_" .. d, text = tostring(d),
+                            callback = function() self:onDigit(dv) end }
+    end
+    local number_pad = self:buildNumberPad(keys)
+    self.digit_button_refs = {}
+    for d = 1, MAX_DIGIT do
+        self.digit_button_refs[d] = number_pad:getButtonById("digit_" .. d)
     end
 
     -- Bottom bar
-    local bottom_buttons = ButtonTable:new{
-        shrink_unneeded_width = true,
-        width   = button_width,
-        buttons = {{
-            { text = _("Check"), callback = function() self:onCheck() end },
-            { text = _("Hint"), callback = function() self:onHint() end },
-            { text = _("Erase"), callback = function() self:onErase() end },
-            { id = "undo_button", text = _("Undo"),
-              callback = function() self:onUndo() end },
-        }},
-    }
-    self.undo_button = bottom_buttons:getButtonById("undo_button")
+    local action_bar = self:buildActionBar({
+        { text = _("Check"), callback = function() self:onCheck() end },
+        { text = _("Hint"),  callback = function() self:onHint() end },
+        { text = _("Erase"), callback = function() self:onErase() end },
+        { id = "undo_button", text = _("Undo"),
+          callback = function() self:onUndo() end },
+    })
+    self.undo_button = action_bar:getButtonById("undo_button")
     self:_updateUndoButton()
 
-    local footer = VerticalGroup:new{
+    self.status_text:setMaxWidth(self:getControlsWidth())
+    local controls = VerticalGroup:new{
         align = "center",
-        digit_buttons,
+        self.status_text,
         VerticalSpan:new{ width = Size.span.vertical_large },
-        bottom_buttons,
+        number_pad,
+        VerticalSpan:new{ width = Size.span.vertical_default },
+        action_bar,
+    }
+
+    -- The widget draws its own outer border, so the frame only pads.
+    local frame_pad = Size.padding.large
+    local budget_w, budget_h = self:getBoardBudget(title_bar, controls)
+    self.board_widget = FillominoBoardWidget:new{
+        max_size       = math.min(budget_w, budget_h) - 2 * frame_pad,
+        board          = self.board,
+        onCellSelected = function(r, c) self:onCellSelected(r, c) end,
+    }
+    if self.selected then
+        self.board_widget:setSelected(self.selected.r, self.selected.c)
+    end
+    local board_frame = FrameContainer:new{
+        padding    = frame_pad,
+        margin     = 0,
+        bordersize = 0,
+        self.board_widget,
     }
 
     if is_landscape then
-        local right_panel = VerticalGroup:new{
-            align = "center",
-            self.status_text,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            footer,
-        }
         local content = HorizontalGroup:new{
             align = "center",
             board_frame,
-            HorizontalSpan:new{ width = Size.span.horizontal_default },
-            right_panel,
+            HorizontalSpan:new{ width = self:getGutter() },
+            controls,
         }
         self:buildLandscapeLayout(title_bar, content)
     else
-        local content = VerticalGroup:new{
-            align = "center",
-            board_frame,
-            VerticalSpan:new{ width = Size.span.vertical_large },
-            self.status_text,
-        }
-        self:buildPortraitLayout(title_bar, content, footer)
+        self:buildPortraitLayout(title_bar, board_frame,
+            VerticalGroup:new{ align = "center", controls, VerticalSpan:new{ width = self:getGutter() } })
     end
     self:updateStatus()
 end
@@ -251,7 +223,8 @@ function FillominoScreen:onNewGame()
 end
 
 function FillominoScreen:onUndo()
-    local ok, msg = self.board:undo()
+    -- board.undo is the UndoStack field, which shadows the :undo() method.
+    local ok, msg = FillominoBoard.undo(self.board)
     if ok then
         self.plugin:saveState(self.board:serialize())
         self:_updateUndoButton()
@@ -283,7 +256,7 @@ function FillominoScreen:openGridMenu()
         sizes[#sizes + 1] = { id = sz, text = sz .. "\xC3\x97" .. sz }
     end
     MenuHelper.openSizeMenu{
-        title     = _("Select grid size"),
+        title     = _("Select size"),
         sizes     = sizes,
         current   = self.plugin:getSetting("grid_n", 6),
         parent    = self,
@@ -324,25 +297,31 @@ function FillominoScreen:updateStatus(msg)
         local remaining = self.board:getRemainingCells()
         local diff      = self.plugin:getSetting("difficulty", "medium")
         local label     = MenuHelper.DIFFICULTY_LABELS[diff] or diff
-        status = T(_("%1\xC3\x97%2 \xC2\xB7 %3 \xC2\xB7 Empty: %4"),
-            self.board.n, self.board.n, label, remaining)
+        status = self:joinStatus(T("%1×%2", self.board.n, self.board.n), label, T(_("Empty: %1"), remaining))
     end
     ScreenBase.updateStatus(self, status)
+    -- Every move, hint, undo and reveal ends with a status update, so this
+    -- is where the bar learns that the round ended (or was undone).
+    self:refreshActionBar()
 end
 
 function FillominoScreen:getGridButtonText()
-    return T(_("Grid: %1"), self.board.n .. "\xC3\x97" .. self.board.n)
+    return T(_("Size: %1"), self.board.n .. "\xC3\x97" .. self.board.n)
 end
 
 function FillominoScreen:getDiffButtonText()
     local diff  = self.plugin:getSetting("difficulty", "medium")
     local label = MenuHelper.DIFFICULTY_LABELS[diff] or diff
-    return T(_("Diff: %1"), label)
+    return T(_("Difficulty: %1"), label)
 end
 
 function FillominoScreen:_updateUndoButton()
     if not self.undo_button then return end
     self.undo_button:enableDisable(self.board:canUndo())
+end
+
+function FillominoScreen:isRoundOver()
+    return self.board:isSolved()
 end
 
 return FillominoScreen

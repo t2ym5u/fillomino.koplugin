@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-10-30
+
+### Changed
+- Redesigned play screen: the digits 1-9 form one even row of keys above a
+  full-width Check/Hint/Erase/Undo bar, and the board fills the room they
+  leave, with one edge around it.
+- The status line reads "6×6 · Medium · Empty: 20" and wraps in landscape
+  instead of being cut off.
+- Title-bar menu: "Size: 6×6" and "Difficulty: Medium" instead of "Grid: 6×6"
+  and "Diff: Medium".
+- Once the puzzle is solved, the action bar shows "New game" in place of its
+  buttons.
+
+### Fixed
+- Tapping Undo crashed ("attempt to call method 'undo'"): the board's undo
+  stack field shadowed its `undo()` method.
+- Digits overflowed their cells: game-common's font fit accepted every size,
+  then DPI scaled it up again. They now fit their cell on every screen.
+- An applied Hint no longer wipes the saved game (game-common saved it as
+  nil). When a hint fills the last cell, the status now shows the win message.
+
 ## [1.2.2] - 2026-10-07
 
 ### Fixed
