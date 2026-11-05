@@ -1,6 +1,16 @@
+local _dir = debug.getinfo(1, "S").source:sub(2):match("(.*[/\\])") or "./"
+local function lrequire(name)
+    local key = _dir .. name
+    if not package.loaded[key] then
+        package.loaded[key] = assert(loadfile(_dir .. name .. ".lua"))()
+    end
+    return package.loaded[key]
+end
+
 local UndoStack  = require("undo_stack")
 local grid_utils = require("grid_utils")
 local Hint      = require("hint")
+local Solver    = lrequire("solver")
 
 local emptyGrid     = grid_utils.emptyGrid
 local emptyBoolGrid = grid_utils.emptyBoolGrid
@@ -176,225 +186,180 @@ local function generateSolution(n)
 end
 
 -- ---------------------------------------------------------------------------
--- Uniqueness counter: MRV-over-regions (mirrors nurikabe's island-growing
--- solver). Grows each given-clue-seeded region -- target size = its clue
--- value, known up front -- one frontier cell at a time, rather than guessing
--- a raw value per empty cell (which is intractably slow here since regions
--- can run past 20 cells once merges cascade). Deliberate approximation: only
--- grows regions that already have >=1 given clue; it does not consider an
--- alternate completion that invents a brand-new region with zero clues
--- anywhere in it. createPuzzle always keeps >=1 given cell per region while
--- digging (losing a region's last clue makes this solver unable to claim
--- those cells at all, so it naturally reports "not unique" and the digger
--- reverts that hide), so this bias only affects exotic phantom-region
--- completions, never the puzzle's own intended solution.
+-- Create puzzle from solution: dig with the logic solver as the gate.
+-- Starts fully revealed and hides cells one at a time in a random order; a
+-- hide stays only if the solver (solver.lua, no trial) still fills the whole
+-- grid with the steps allowed at that point. A puzzle the solver fills is
+-- unique -- also when a region ends up with no clue at all -- and never
+-- needs a guess.
+--
+-- The dig runs in three phases, each going on from the previous one, so
+-- every level's puzzle is a prefix of one list of hides:
+--   phase 1  tier 1 (borders, single exits, groups that can only complete
+--            one way), random order, until HIDE_SHARE[1] of the cells are
+--            hidden -- every region keeps a clue
+--   phase 2  tier 2 (also "too small a space", "must pass through here"),
+--            cells of the regions with the most clues left first, until
+--            HIDE_SHARE[2]
+--   phase 3  tier 3 (also small pockets that fill only one way), random
+--            order, as far as logic goes
+-- Easy keeps the phase-1 hides, Medium phases 1-2, Hard all three. When a
+-- phase adds nothing (logic ran out early), the level below gives back a
+-- few hides, so Easy shows more clues than Medium and Medium more than
+-- Hard: a seed never gives two levels the same puzzle.
+--
+-- Work is bounded by solver runs, never by time: each phase tries each
+-- still-given cell at most once, so at most 3*n*n quick runs, plus the final
+-- checks.
 -- ---------------------------------------------------------------------------
 
-local function countSolutions(puzzle, given, n, limit, node_budget)
-    local color = {}
-    for r = 1, n do color[r] = {}; for c = 1, n do color[r][c] = 0 end end
+local LEVEL_TIER = { easy = 1, medium = 2, hard = 3 }
+local HIDE_SHARE = { 0.48, 0.58, 1 }
 
-    local regions = {}
-    local gseen = emptyBoolGrid(n)
+-- Regions of the solution: region[r][c] = id, size[id] = cells.
+local function solutionRegions(solution, n)
+    local region, size = emptyGrid(n), {}
     for r = 1, n do
         for c = 1, n do
-            if given[r][c] and not gseen[r][c] then
-                local v = puzzle[r][c]
-                local idx = #regions + 1
-                local stack = { {r, c} }
-                gseen[r][c] = true
-                color[r][c] = idx
-                local cells = { {r, c} }
-                while #stack > 0 do
-                    local cur = table.remove(stack)
-                    for _, d in ipairs(DIRS) do
-                        local nr, nc = cur[1] + d[1], cur[2] + d[2]
-                        if nr >= 1 and nr <= n and nc >= 1 and nc <= n and given[nr][nc]
-                            and puzzle[nr][nc] == v and not gseen[nr][nc] then
-                            gseen[nr][nc] = true
-                            color[nr][nc] = idx
-                            cells[#cells + 1] = {nr, nc}
-                            stack[#stack + 1] = {nr, nc}
-                        end
-                    end
-                end
-                regions[idx] = { target = v, cells = cells }
-            end
-        end
-    end
-    local num_regions = #regions
-
-    local total_cells = n * n
-    local claimed = 0
-    for r = 1, n do for c = 1, n do if given[r][c] then claimed = claimed + 1 end end end
-
-    local solutions, nodes, exhausted = 0, 0, false
-
-    local function frontierFor(idx)
-        local reg = regions[idx]
-        local cands, seen = {}, {}
-        for _, cell in ipairs(reg.cells) do
-            for _, d in ipairs(DIRS) do
-                local nr, nc = cell[1] + d[1], cell[2] + d[2]
-                local key = nr * 1000 + nc
-                if nr >= 1 and nr <= n and nc >= 1 and nc <= n and color[nr][nc] == 0 and not seen[key] then
-                    local conflict = false
-                    for _, d2 in ipairs(DIRS) do
-                        local mr, mc = nr + d2[1], nc + d2[2]
-                        if mr >= 1 and mr <= n and mc >= 1 and mc <= n then
-                            local ov = color[mr][mc]
-                            if ov > 0 and ov ~= idx and regions[ov].target == reg.target then
-                                conflict = true; break
-                            end
-                        end
-                    end
-                    if not conflict then seen[key] = true; cands[#cands + 1] = {nr, nc} end
-                end
-            end
-        end
-        return cands
-    end
-
-    local function search()
-        if solutions >= limit or exhausted then return end
-        nodes = nodes + 1
-        if nodes > node_budget then exhausted = true; return end
-
-        local best_idx, best_frontier, best_len = nil, nil, math.huge
-        for i = 1, num_regions do
-            if #regions[i].cells < regions[i].target then
-                local frontier = frontierFor(i)
-                if #frontier < best_len then
-                    best_len, best_frontier, best_idx = #frontier, frontier, i
-                    if best_len == 0 then break end
-                end
-            end
-        end
-
-        if not best_idx then
-            if claimed == total_cells then solutions = solutions + 1 end
-            return
-        end
-        if best_len == 0 then return end
-
-        local reg = regions[best_idx]
-        for _, cell in ipairs(best_frontier) do
-            local cr, cc = cell[1], cell[2]
-            color[cr][cc] = best_idx
-            reg.cells[#reg.cells + 1] = cell
-            claimed = claimed + 1
-            search()
-            claimed = claimed - 1
-            reg.cells[#reg.cells] = nil
-            color[cr][cc] = 0
-            if solutions >= limit or exhausted then return end
-        end
-    end
-    search()
-    return solutions, exhausted
-end
-
--- Scale the search node budget down for larger grids, mirroring nurikabe's
--- uniquenessBudgetFor -- larger n means both a bigger CSP and more digging
--- attempts, so keep per-call cost bounded.
-local function nodeBudgetFor(n)
-    if n <= 6 then return 60000 end
-    if n <= 7 then return 40000 end
-    return 25000
-end
-
--- ---------------------------------------------------------------------------
--- Create puzzle from solution: dig-with-verification. Starts fully revealed
--- and hides cells one at a time in random order, verifying uniqueness with
--- countSolutions after each tentative hide and reverting if it broke
--- uniqueness -- the same pattern already used by sudoku-common and now most
--- of this fleet. The old behavior picked a flat per-region reveal ratio with
--- zero uniqueness verification.
--- ---------------------------------------------------------------------------
-
-local function createPuzzle(solution, n, difficulty)
-    -- Find all regions, only to compute how many cells the old flat-ratio
-    -- scheme would have revealed -- used as the total-hide budget below so
-    -- difficulty still controls roughly how sparse the puzzle is.
-    local visited = emptyBoolGrid(n)
-    local regions = {}
-
-    for r = 1, n do
-        for c = 1, n do
-            if not visited[r][c] then
-                local v     = solution[r][c]
-                local stack = { {r, c} }
-                local cells = {}
-                visited[r][c] = true
+            if region[r][c] == 0 then
+                local id = #size + 1
+                local v, stack, cnt = solution[r][c], { {r, c} }, 0
+                region[r][c] = id
                 while #stack > 0 do
                     local cell = table.remove(stack)
-                    local cr, cc = cell[1], cell[2]
-                    cells[#cells + 1] = {cr, cc}
+                    cnt = cnt + 1
                     for _, d in ipairs(DIRS) do
-                        local nr, nc = cr + d[1], cc + d[2]
+                        local nr, nc = cell[1] + d[1], cell[2] + d[2]
                         if nr >= 1 and nr <= n and nc >= 1 and nc <= n
-                            and not visited[nr][nc]
-                            and solution[nr][nc] == v then
-                            visited[nr][nc] = true
+                            and region[nr][nc] == 0 and solution[nr][nc] == v then
+                            region[nr][nc] = id
                             stack[#stack + 1] = {nr, nc}
                         end
                     end
                 end
-                regions[#regions + 1] = { value = v, cells = cells }
+                size[id] = cnt
             end
         end
     end
+    return region, size
+end
 
-    local target_reveal = 0
-    for _, reg in ipairs(regions) do
-        local k = #reg.cells
-        local reveal_count
-        if difficulty == "easy" then
-            reveal_count = math.max(1, math.floor(k * 0.5))
-        elseif difficulty == "hard" then
-            reveal_count = 1
-        else
-            reveal_count = math.max(1, math.floor(k * 0.3))
+-- One phase: try to hide still-given cells while fewer than `cap` are
+-- hidden, each cell at most once, and none phase 2 failed when `skip_failed`
+-- (phase 3). `rich`: try first the cells whose region keeps the most clues
+-- (the likeliest to go), else follow the random order. `probe`: stop at the
+-- first hide. The quick test of a hide stops the solver as soon as it
+-- deduces the hidden cell again -- from there it knows at least what the
+-- previous, verified, puzzle gave it.
+local function digPhase(D, tier, cap, rich, probe, skip_failed)
+    local puzzle, solution, n = D.puzzle, D.solution, D.n
+    local region, clues, kept, failed = D.region, D.clues, D.kept, D.failed
+    local tried, found = {}, 0
+    while #kept < cap do
+        local cell, best
+        for _, cand in ipairs(D.order) do
+            local r, c = cand[1], cand[2]
+            if puzzle[r][c] ~= 0 and not tried[cand]
+                and not (skip_failed and failed[cand]) then
+                local cl = clues[region[r][c]]
+                if not best or cl > best then cell, best = cand, cl end
+                if not rich then break end
+            end
         end
-        target_reveal = target_reveal + math.min(reveal_count, k)
+        if not cell then break end
+        tried[cell] = true
+        if D.tick then D.tick() end
+        local r, c = cell[1], cell[2]
+        puzzle[r][c] = 0
+        if Solver.solve(puzzle, n, tier, cell) then
+            kept[#kept + 1] = cell
+            clues[region[r][c]] = clues[region[r][c]] - 1
+            found = found + 1
+            if probe then break end
+        else
+            puzzle[r][c] = solution[r][c]
+            if tier == 2 then failed[cell] = true end
+        end
     end
-    local target_hide = n * n - target_reveal
+    return found
+end
 
-    local puzzle = emptyGrid(n)
-    local given  = emptyBoolGrid(n)
+local function sameGrid(a, b, n)
     for r = 1, n do
         for c = 1, n do
-            puzzle[r][c] = solution[r][c]
-            given[r][c]  = true
+            if a[r][c] ~= b[r][c] then return false end
         end
     end
+    return true
+end
 
+local function createPuzzle(solution, n, difficulty, on_progress)
+    local level = LEVEL_TIER[difficulty] or 2
+    local N = n * n
+    local back = math.max(2, math.floor(N * 0.06))
+
+    local puzzle = emptyGrid(n)
+    for r = 1, n do
+        for c = 1, n do puzzle[r][c] = solution[r][c] end
+    end
     local order = {}
     for r = 1, n do
         for c = 1, n do order[#order + 1] = {r, c} end
     end
     shuffle(order)
 
-    local budget = nodeBudgetFor(n)
-    local hidden = 0
-    for _, cell in ipairs(order) do
-        if hidden >= target_hide then break end
-        local r, c = cell[1], cell[2]
-        given[r][c] = false
-        local solutions, exhausted = countSolutions(puzzle, given, n, 2, budget)
-        if solutions == 1 and not exhausted then
-            hidden = hidden + 1
+    local tries, expect = 0, N * (level == 3 and 3 or 2.2)
+    local tick = on_progress and function()
+        tries = tries + 1
+        on_progress(math.min(0.95, tries / expect))
+    end
+
+    -- Phases 1 and 2 are the same for every level; Hard goes on with
+    -- phase 3, Easy and Medium only probe it (does it add a hide at all?
+    -- That doesn't depend on the order the cells are tried in.)
+    -- Phase 3 skips the cells phase 2 failed to hide: the grid has only
+    -- lost clues since, so tier 2 would fail them again, and the pockets of
+    -- tier 3 rarely make the difference -- these runs were most of the time.
+    local region, clues = solutionRegions(solution, n)
+    local kept, h = {}, {}
+    local D = {
+        puzzle = puzzle, solution = solution, n = n, order = order,
+        region = region, clues = clues, kept = kept, failed = {}, tick = tick,
+    }
+    digPhase(D, 1, math.floor(N * HIDE_SHARE[1]), false)
+    h[1] = #kept
+    digPhase(D, 2, math.floor(N * HIDE_SHARE[2]), true)
+    h[2] = #kept
+    local want
+    if level == 3 then
+        digPhase(D, 3, N, false, false, true)
+        want = #kept
+    else
+        local more = digPhase(D, 3, h[2] + 1, true, true, true) > 0
+        local len2 = more and h[2] or math.max(0, h[2] - back)
+        if level == 2 then
+            want = len2
         else
-            given[r][c] = true
+            want = (len2 > h[1]) and h[1] or math.max(0, len2 - back)
         end
     end
-
-    for r = 1, n do
-        for c = 1, n do
-            if not given[r][c] then puzzle[r][c] = 0 end
-        end
+    for j = #kept, want + 1, -1 do
+        local cell = kept[j]
+        puzzle[cell[1]][cell[2]] = solution[cell[1]][cell[2]]
+        kept[j] = nil
     end
 
+    -- Never ship an unverified puzzle: solve it in full, to the very
+    -- solution; should that ever fail, give back the latest hides one at a
+    -- time until it passes (the full grid always does).
+    while #kept > 0 do
+        local ok, grid = Solver.solve(puzzle, n, level)
+        if ok and sameGrid(grid, solution, n) then break end
+        local cell = kept[#kept]
+        puzzle[cell[1]][cell[2]] = solution[cell[1]][cell[2]]
+        kept[#kept] = nil
+    end
+    if on_progress then on_progress(1) end
     return puzzle
 end
 
@@ -422,13 +387,14 @@ function FillominoBoard:new(opts)
     return obj
 end
 
-function FillominoBoard:generate(difficulty)
+-- `on_progress(fraction)`, optional, for the screen's progress bar.
+function FillominoBoard:generate(difficulty, on_progress)
     self.difficulty = difficulty or self.difficulty
     self.undo:clear()
     local n = self.n
 
     local solution = generateSolution(n)
-    local puzzle   = createPuzzle(solution, n, self.difficulty)
+    local puzzle   = createPuzzle(solution, n, self.difficulty, on_progress)
 
     self.solution    = solution
     self.puzzle      = puzzle
@@ -573,19 +539,20 @@ function FillominoBoard:checkProgress()
     end
 end
 
+-- Any valid filling wins, not only the stored solution: every cell filled
+-- and every group of equal numbers exactly as big as its number (two equal
+-- groups that touch are one group, so they come out too big). Givens can't
+-- be edited, so they always match.
 function FillominoBoard:isSolved()
     local n = self.n
-    -- All cells must be filled
     for r = 1, n do
         for c = 1, n do
             if self.user[r][c] == 0 then return false end
         end
     end
-    -- Verify via solution
-    for r = 1, n do
-        for c = 1, n do
-            if self.user[r][c] ~= self.solution[r][c] then return false end
-        end
+    local _, regions = computeUserRegions(self.user, n)
+    for _, reg in ipairs(regions) do
+        if #reg.cells ~= reg.value then return false end
     end
     return true
 end

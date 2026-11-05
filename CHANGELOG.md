@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-11-05
+
+### Changed
+- Easy, Medium and Hard are really different now. They used to give the
+  very same grid for a given game, with about 70% of the cells filled in.
+  Easy now fills in about half the cells, keeps a clue in every region and
+  only needs simple steps; Medium shows fewer clues and needs more
+  thinking (a cell whose space is too small for a number, a cell a group
+  must grow through, regions with no clue at all); Hard shows the fewest.
+- Every puzzle is checked by a new logic solver, the way a player reasons:
+  it always has exactly one solution and never needs a guess. Before, about
+  one grid in eight could not be finished by step-by-step logic alone.
+- The Daily Challenge grid of the day changes once with this update.
+- A progress bar shows while a large grid is being made.
+
+### Fixed
+- Any correct filling of the grid now wins, not only the one stored with
+  the puzzle.
+
 ## [1.4.5] - 2026-11-04
 
 ### Fixed

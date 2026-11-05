@@ -13,7 +13,8 @@ Fill every cell so that each group of orthogonally connected cells sharing the s
 ## Features
 
 - **Multiple grid sizes**
-- **Three difficulty levels** — Easy, Medium, Hard
+- **Three difficulty levels** — Easy (about half the cells given, a clue in every region), Medium, Hard (the fewest clues)
+- **Logic only** — every puzzle has exactly one solution, reachable without guessing
 - **Check** — highlights constraint violations
 - **Hint** — two taps: the first says which cell is about to give, the second acts on it. A cell that contradicts the solution is always reported before a fresh one is revealed
 - **Auto-save** — puzzle state saved and restored on next launch
